@@ -68,9 +68,12 @@ class DiscriminativeEnglishDetector:
             # Average the two probabilities
             avg_english_prob = (lingua_english_prob + fast_english_prob) / 2
 
-            logger.debug(f"lingua_english_prob: {lingua_english_prob}")
-            logger.debug(f"fast_english_prob: {fast_english_prob}")
-            logger.debug(f"avg_english_prob: {avg_english_prob}")
+            print(f"lingua_english_prob: {lingua_english_prob}")
+            print(f"fast_english_prob: {fast_english_prob}")
+            print(f"avg_english_prob: {avg_english_prob}")
+            print(f"threshold: {threshold}")
+
+            print(f"is_eng is {avg_english_prob >= threshold}")
 
             return avg_english_prob >= threshold, avg_english_prob
 
@@ -114,10 +117,10 @@ class DiscriminativeEnglishDetector:
             if word_english_prob >= threshold:
                 english_votes += 1
 
-            logger.debug(f"Word: {word}")
-            logger.debug(f"lingua_english_prob: {lingua_english_prob}")
-            logger.debug(f"fast_english_prob: {fast_english_prob}")
-            logger.debug(f"avg_english_prob: {word_english_prob}")
+            print(f"Word: {word}")
+            print(f"lingua_english_prob: {lingua_english_prob}")
+            print(f"fast_english_prob: {fast_english_prob}")
+            print(f"avg_english_prob: {word_english_prob}")
 
         # All words must be English for text to be English
         if total_votes == 0:
@@ -161,10 +164,12 @@ def detect_language(text: str, threshold: float = 0.1) -> List[ContentAnalysisRe
     is_eng, score = detector.is_english(text, threshold)
 
     # If it's English, allow it (no detection)
+    print(f"is_eng2: {is_eng}")
     if is_eng:
         return []
 
-    return [ContentAnalysisResponse(
+    print(f"score: {score}")
+    resp = ContentAnalysisResponse(
         start=0,
         end=len(text),
         text=text,
@@ -173,7 +178,9 @@ def detect_language(text: str, threshold: float = 0.1) -> List[ContentAnalysisRe
         score=score,
         evidences=[],
         metadata={}
-    )]
+    )
+    print(f"response: {resp}")
+    return [resp]
 
 
 @app.get("/health")
@@ -188,14 +195,14 @@ def analyze_contents(request: ContentAnalysisHttpRequest):
     Returns empty array for each content that is English.
     Returns detection for non-English content.
     """
-    logger.info(f"Received request: contents={request.contents}, params={request.detector_params}")
+    print(f"Received request: contents={request.contents}, params={request.detector_params}")
 
     response = []
     for content in request.contents:
         detections = detect_language(content)
         response.append(detections)
 
-    logger.info(f"Returning response: {response}")
+    print(f"Returning response: {response}")
     return response
 
 
