@@ -18,6 +18,8 @@ EXCLUDED_LANGUAGES = [
     Language.TSONGA,
     Language.TSWANA,
     Language.GANDA,
+    Language.LATIN,      # Dead language, causes false positives on English words with Latin roots
+    Language.ESPERANTO,  # Constructed language, causes false positives on English
 ]
 
 # Build detector from all languages except excluded ones
@@ -33,7 +35,9 @@ detector = (
 )
 
 # Minimum confidence threshold for a detection to be considered valid
-MIN_CONFIDENCE_THRESHOLD = 0.1
+MIN_CONFIDENCE_THRESHOLD = 0.05  # Lowered since ratio check handles false positives
+# Detected language must be this many times more confident than English
+MIN_CONFIDENCE_RATIO = 3.0
 
 
 # Request/Response schemas matching guardrails-detectors
@@ -59,6 +63,7 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
     Returns empty list if text is English.
     Returns detection only if text is non-English.
     """
+    # TODO: Remove debug logging before production
     if not text or not text.strip():
         return []
 
@@ -67,21 +72,34 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
 
     # If can't detect, allow it
     if detected_lang is None:
+        logger.info(f"Text: '{text}' | No language detected")
         return []
 
     # If English, allow it
     if detected_lang == Language.ENGLISH:
+        logger.info(f"Text: '{text}' | English detected, allowing")
         return []
 
-    # Get confidence for detected language
+    # Get confidence scores
     detected_confidence = detector.compute_language_confidence(text, detected_lang)
+    english_confidence = detector.compute_language_confidence(text, Language.ENGLISH)
+
+    ratio = detected_confidence / english_confidence if english_confidence > 0 else float('inf')
+    logger.info(f"Text: '{text}' | Detected: {detected_lang.name} ({detected_confidence:.3f}) vs English ({english_confidence:.3f}) | Ratio: {ratio:.2f}x")
 
     # If detected language confidence is below threshold, treat as uncertain
     if detected_confidence < MIN_CONFIDENCE_THRESHOLD:
+        logger.info(f"  -> Ignored: confidence {detected_confidence:.3f} < {MIN_CONFIDENCE_THRESHOLD}")
         return []
 
+    # If detected language isn't significantly more confident than English, allow it
+    # This handles short ambiguous text like "hello" that could be either
+    if english_confidence > 0 and detected_confidence < (english_confidence * MIN_CONFIDENCE_RATIO):
+        logger.info(f"  -> Ignored: ratio < {MIN_CONFIDENCE_RATIO}x")
+        return []
+
+    logger.info(f"  -> Flagged as non-English")
     # Non-English detected with sufficient confidence - return detection
-    english_confidence = detector.compute_language_confidence(text, Language.ENGLISH)
     score = 1.0 - english_confidence
 
     return [ContentAnalysisResponse(
