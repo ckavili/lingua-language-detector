@@ -35,9 +35,9 @@ detector = (
 )
 
 # Minimum confidence threshold for a detection to be considered valid
-MIN_CONFIDENCE_THRESHOLD = 0.05  # Lowered since ratio check handles false positives
+MIN_CONFIDENCE_THRESHOLD = 0.10  # Require reasonable confidence before flagging
 # Detected language must be this many times more confident than English
-MIN_CONFIDENCE_RATIO = 3.0
+MIN_CONFIDENCE_RATIO = 1.5  # Lowered from 3.0 to catch clearer non-English like "comment vas-tu?"
 
 
 # Request/Response schemas matching guardrails-detectors
