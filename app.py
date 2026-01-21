@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Request
 from pydantic import BaseModel, Field
 from lingua import Language, LanguageDetectorBuilder
+import re
+from fast_langdetect import detect as fast_detect
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,9 +37,9 @@ detector = (
 )
 
 # Minimum confidence threshold for a detection to be considered valid
-MIN_CONFIDENCE_THRESHOLD = 0.10  # Require reasonable confidence before flagging
+MIN_CONFIDENCE_THRESHOLD = 0.15  # Require reasonable confidence before flagging
 # Detected language must be this many times more confident than English
-MIN_CONFIDENCE_RATIO = 1.5  # Lowered from 3.0 to catch clearer non-English like "comment vas-tu?"
+MIN_CONFIDENCE_RATIO = 2.5  # Lowered from 3.0 to catch clearer non-English like "comment vas-tu?"
 
 
 # Request/Response schemas matching guardrails-detectors
@@ -63,9 +65,64 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
     Returns empty list if text is English.
     Returns detection only if text is non-English.
     """
+    # MIN_CONFIDENCE_THRESHOLD = 0.10  # Require reasonable confidence before flagging
+    # # Detected language must be this many times more confident than English
+    # MIN_CONFIDENCE_RATIO = 1.5  # Lowered from 3.0 to catch clearer non-English like "comment vas-tu?"
+      
     # TODO: Remove debug logging before production
     if not text or not text.strip():
         return []
+
+    words = re.findall(r'\b\w+\b', text)
+    if len(words) == 1:
+        word = words[0]
+
+        # Get lingua English probability
+        lingua_conf = detector.compute_language_confidence_values(word)
+        lingua_english_prob = 0
+        for c in lingua_conf:
+            if c.language == Language.ENGLISH:
+                lingua_english_prob = c.value
+                break
+
+        # Get fast-langdetect English probability
+        # try:
+        fast_result = fast_detect(word, k=10)  # Get all languages
+        fast_english_prob = 0
+        for r in fast_result:
+            if r['lang'] == 'en':
+                fast_english_prob = r['score']
+                break
+        # except:
+        #     fast_english_prob = 0.5  # Neutral if fails
+
+
+        #   # Average the two probabilities
+        avg_english_prob = (lingua_english_prob + fast_english_prob) / 2
+
+        logger.info(f"avg_english_prob: '{avg_english_prob}'")
+
+        if avg_english_prob >= 0.11:
+            logger.info(f"Allowing '{text}'")
+            return []
+        else:
+            logger.info(f"Blocking '{text}'")
+            detected_lang = detector.detect_language_of(text)
+            resp = [ContentAnalysisResponse(
+                start=0,
+                end=len(text),
+                text=text,
+                detection="non_english",
+                detection_type="language_detection",
+                score=0.0,
+                evidences=[],
+                metadata={
+                    "detected_language": detected_lang.name,
+                    "english_confidence": 0.0
+                }
+            )]
+            logger.info(f"Sending: {resp}")
+            return resp
 
     # Detect the primary language
     detected_lang = detector.detect_language_of(text)
@@ -97,11 +154,11 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
     if english_confidence > 0 and detected_confidence < (english_confidence * MIN_CONFIDENCE_RATIO):
         logger.info(f"  -> Ignored: ratio < {MIN_CONFIDENCE_RATIO}x")
         return []
-
+    
     logger.info(f"  -> Flagged as non-English")
+
     # Non-English detected with sufficient confidence - return detection
     score = 1.0 - english_confidence
-
     return [ContentAnalysisResponse(
         start=0,
         end=len(text),
