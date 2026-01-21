@@ -102,23 +102,24 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
 
         logger.info(f"avg_english_prob: '{avg_english_prob}'")
 
-        if avg_english_prob >= 0.11:
+        if avg_english_prob >= 0.1:
             logger.info(f"Allowing '{text}'")
             return []
         else:
             logger.info(f"Blocking '{text}'")
             detected_lang = detector.detect_language_of(text)
+            score = 1.0 - avg_english_prob
             resp = [ContentAnalysisResponse(
                 start=0,
                 end=len(text),
                 text=text,
                 detection="non_english",
                 detection_type="language_detection",
-                score=0.0,
+                score=score,
                 evidences=[],
                 metadata={
                     "detected_language": detected_lang.name,
-                    "english_confidence": 0.0
+                    "english_confidence": avg_english_prob
                 }
             )]
             logger.info(f"Sending: {resp}")
