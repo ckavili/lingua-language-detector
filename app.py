@@ -65,117 +65,140 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
     Returns empty list if text is English.
     Returns detection only if text is non-English.
     """
-    # MIN_CONFIDENCE_THRESHOLD = 0.10  # Require reasonable confidence before flagging
-    # # Detected language must be this many times more confident than English
-    # MIN_CONFIDENCE_RATIO = 1.5  # Lowered from 3.0 to catch clearer non-English like "comment vas-tu?"
-      
-    # TODO: Remove debug logging before production
-    if not text or not text.strip():
-        return []
+    try:
+        # MIN_CONFIDENCE_THRESHOLD = 0.10  # Require reasonable confidence before flagging
+        # # Detected language must be this many times more confident than English
+        # MIN_CONFIDENCE_RATIO = 1.5  # Lowered from 3.0 to catch clearer non-English like "comment vas-tu?"
 
-    words = re.findall(r'\b\w+\b', text)
-    if len(words) == 1:
-        word = words[0]
-
-        # Get lingua English probability
-        lingua_conf = detector.compute_language_confidence_values(word)
-        lingua_english_prob = 0
-        for c in lingua_conf:
-            if c.language == Language.ENGLISH:
-                lingua_english_prob = c.value
-                break
-
-        # Get fast-langdetect English probability
-        # try:
-        fast_result = fast_detect(word, k=10)  # Get all languages
-        fast_english_prob = 0
-        for r in fast_result:
-            if r['lang'] == 'en':
-                fast_english_prob = r['score']
-                break
-        # except:
-        #     fast_english_prob = 0.5  # Neutral if fails
-
-
-        #   # Average the two probabilities
-        avg_english_prob = (lingua_english_prob + fast_english_prob) / 2
-
-        logger.info(f"avg_english_prob: '{avg_english_prob}'")
-
-        if avg_english_prob >= 0.1:
-            logger.info(f"Allowing '{text}'")
+        # TODO: Remove debug logging before production
+        if not text or not text.strip():
             return []
-        else:
-            logger.info(f"Blocking '{text}'")
-            detected_lang = detector.detect_language_of(text)
-            if detected_lang is None:
-                logger.info(f"Text: '{text}' | No language detected")
+
+        words = re.findall(r'\b\w+\b', text)
+        if len(words) == 1:
+            word = words[0]
+
+            # Get lingua English probability
+            try:
+                lingua_conf = detector.compute_language_confidence_values(word)
+                lingua_english_prob = 0
+                for c in lingua_conf:
+                    if hasattr(c, 'language') and hasattr(c, 'value'):
+                        if c.language == Language.ENGLISH:
+                            lingua_english_prob = c.value
+                            break
+            except Exception as e:
+                logger.error(f"Error computing lingua confidence for '{word}': {e}")
+                lingua_english_prob = 0.5  # Neutral value on error
+
+            # Get fast-langdetect English probability
+            try:
+                fast_result = fast_detect(word, k=10)  # Get all languages
+                fast_english_prob = 0
+                for r in fast_result:
+                    if r.get('lang') == 'en':
+                        fast_english_prob = r.get('score', 0)
+                        break
+            except Exception as e:
+                logger.error(f"Error in fast_detect for '{word}': {e}")
+                fast_english_prob = 0.5  # Neutral if fails
+
+            # Average the two probabilities
+            avg_english_prob = (lingua_english_prob + fast_english_prob) / 2
+
+            logger.info(f"avg_english_prob: '{avg_english_prob}'")
+
+            if avg_english_prob >= 0.1:
+                logger.info(f"Allowing '{text}'")
                 return []
-            score = 1.0 - avg_english_prob
-            resp = [ContentAnalysisResponse(
-                start=0,
-                end=len(text),
-                text=text,
-                detection="non_english",
-                detection_type="language_detection",
-                score=score,
-                evidences=[],
-                metadata={
-                    "detected_language": detected_lang.name,
-                    "english_confidence": avg_english_prob
-                }
-            )]
-            logger.info(f"Sending: {resp}")
-            return resp
+            else:
+                logger.info(f"Blocking '{text}'")
+                try:
+                    detected_lang = detector.detect_language_of(text)
+                except Exception as e:
+                    logger.error(f"Error detecting language for '{text}': {e}")
+                    return []
 
-    # Detect the primary language
-    detected_lang = detector.detect_language_of(text)
+                if detected_lang is None:
+                    logger.info(f"Text: '{text}' | No language detected")
+                    return []
+                score = 1.0 - avg_english_prob
+                resp = [ContentAnalysisResponse(
+                    start=0,
+                    end=len(text),
+                    text=text,
+                    detection="non_english",
+                    detection_type="language_detection",
+                    score=score,
+                    evidences=[],
+                    metadata={
+                        "detected_language": detected_lang.name,
+                        "english_confidence": avg_english_prob
+                    }
+                )]
+                logger.info(f"Sending: {resp}")
+                return resp
 
-    # If can't detect, allow it
-    if detected_lang is None:
-        logger.info(f"Text: '{text}' | No language detected")
+        # Detect the primary language
+        try:
+            detected_lang = detector.detect_language_of(text)
+        except Exception as e:
+            logger.error(f"Error detecting language for '{text}': {e}")
+            return []
+
+        # If can't detect, allow it
+        if detected_lang is None:
+            logger.info(f"Text: '{text}' | No language detected")
+            return []
+
+        # If English, allow it
+        if detected_lang == Language.ENGLISH:
+            logger.info(f"Text: '{text}' | English detected, allowing")
+            return []
+
+        # Get confidence scores
+        try:
+            detected_confidence = detector.compute_language_confidence(text, detected_lang)
+            english_confidence = detector.compute_language_confidence(text, Language.ENGLISH)
+        except Exception as e:
+            logger.error(f"Error computing confidence scores for '{text}': {e}")
+            return []
+
+        ratio = detected_confidence / english_confidence if english_confidence > 0 else float('inf')
+        logger.info(f"Text: '{text}' | Detected: {detected_lang.name} ({detected_confidence:.3f}) vs English ({english_confidence:.3f}) | Ratio: {ratio:.2f}x")
+
+        # If detected language confidence is below threshold, treat as uncertain
+        if detected_confidence < MIN_CONFIDENCE_THRESHOLD:
+            logger.info(f"  -> Ignored: confidence {detected_confidence:.3f} < {MIN_CONFIDENCE_THRESHOLD}")
+            return []
+
+        # If detected language isn't significantly more confident than English, allow it
+        # This handles short ambiguous text like "hello" that could be either
+        if english_confidence > 0 and detected_confidence < (english_confidence * MIN_CONFIDENCE_RATIO):
+            logger.info(f"  -> Ignored: ratio < {MIN_CONFIDENCE_RATIO}x")
+            return []
+
+        logger.info(f"  -> Flagged as non-English")
+
+        # Non-English detected with sufficient confidence - return detection
+        score = 1.0 - english_confidence
+        return [ContentAnalysisResponse(
+            start=0,
+            end=len(text),
+            text=text,
+            detection="non_english",
+            detection_type="language_detection",
+            score=score,
+            evidences=[],
+            metadata={
+                "detected_language": detected_lang.name,
+                "english_confidence": english_confidence
+            }
+        )]
+    except Exception as e:
+        # Catch-all for any unexpected errors
+        logger.error(f"Unexpected error in detect_language for '{text}': {e}")
         return []
-
-    # If English, allow it
-    if detected_lang == Language.ENGLISH:
-        logger.info(f"Text: '{text}' | English detected, allowing")
-        return []
-
-    # Get confidence scores
-    detected_confidence = detector.compute_language_confidence(text, detected_lang)
-    english_confidence = detector.compute_language_confidence(text, Language.ENGLISH)
-
-    ratio = detected_confidence / english_confidence if english_confidence > 0 else float('inf')
-    logger.info(f"Text: '{text}' | Detected: {detected_lang.name} ({detected_confidence:.3f}) vs English ({english_confidence:.3f}) | Ratio: {ratio:.2f}x")
-
-    # If detected language confidence is below threshold, treat as uncertain
-    if detected_confidence < MIN_CONFIDENCE_THRESHOLD:
-        logger.info(f"  -> Ignored: confidence {detected_confidence:.3f} < {MIN_CONFIDENCE_THRESHOLD}")
-        return []
-
-    # If detected language isn't significantly more confident than English, allow it
-    # This handles short ambiguous text like "hello" that could be either
-    if english_confidence > 0 and detected_confidence < (english_confidence * MIN_CONFIDENCE_RATIO):
-        logger.info(f"  -> Ignored: ratio < {MIN_CONFIDENCE_RATIO}x")
-        return []
-    
-    logger.info(f"  -> Flagged as non-English")
-
-    # Non-English detected with sufficient confidence - return detection
-    score = 1.0 - english_confidence
-    return [ContentAnalysisResponse(
-        start=0,
-        end=len(text),
-        text=text,
-        detection="non_english",
-        detection_type="language_detection",
-        score=score,
-        evidences=[],
-        metadata={
-            "detected_language": detected_lang.name,
-            "english_confidence": english_confidence
-        }
-    )]
 
 
 @app.get("/health")
@@ -190,7 +213,16 @@ def analyze_contents(request: ContentAnalysisHttpRequest):
     Returns empty array for each content that is English.
     Returns detection for non-English content.
     """
-    return [detect_language(content) for content in request.contents]
+    results = []
+    for content in request.contents:
+        try:
+            results.append(detect_language(content))
+        except Exception as e:
+            # If detect_language itself fails (should be rare with internal error handling),
+            # return empty list for this content item
+            logger.error(f"Critical error processing content '{content}': {e}")
+            results.append([])
+    return results
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
