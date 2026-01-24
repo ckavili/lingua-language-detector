@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Request
@@ -7,7 +8,9 @@ from lingua import Language, LanguageDetectorBuilder
 import re
 from fast_langdetect import detect as fast_detect
 
-logging.basicConfig(level=logging.INFO)
+# Configure logging level from environment variable (default: INFO)
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Lingua Language Detector")
@@ -106,13 +109,13 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
             # Average the two probabilities
             avg_english_prob = (lingua_english_prob + fast_english_prob) / 2
 
-            logger.info(f"avg_english_prob: '{avg_english_prob}'")
+            logger.debug(f"avg_english_prob: '{avg_english_prob}'")
 
             if avg_english_prob >= 0.1:
-                logger.info(f"Allowing '{text}'")
+                logger.debug(f"Allowing '{text}'")
                 return []
             else:
-                logger.info(f"Blocking '{text}'")
+                logger.debug(f"Blocking '{text}'")
                 try:
                     detected_lang = detector.detect_language_of(text)
                 except Exception as e:
@@ -120,7 +123,7 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
                     return []
 
                 if detected_lang is None:
-                    logger.info(f"Text: '{text}' | No language detected")
+                    logger.debug(f"Text: '{text}' | No language detected")
                     return []
                 score = 1.0 - avg_english_prob
                 resp = [ContentAnalysisResponse(
@@ -136,7 +139,7 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
                         "english_confidence": avg_english_prob
                     }
                 )]
-                logger.info(f"Sending: {resp}")
+                logger.debug(f"Sending: {resp}")
                 return resp
 
         # Detect the primary language
@@ -148,12 +151,12 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
 
         # If can't detect, allow it
         if detected_lang is None:
-            logger.info(f"Text: '{text}' | No language detected")
+            logger.debug(f"Text: '{text}' | No language detected")
             return []
 
         # If English, allow it
         if detected_lang == Language.ENGLISH:
-            logger.info(f"Text: '{text}' | English detected, allowing")
+            logger.debug(f"Text: '{text}' | English detected, allowing")
             return []
 
         # Get confidence scores
@@ -165,20 +168,20 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
             return []
 
         ratio = detected_confidence / english_confidence if english_confidence > 0 else float('inf')
-        logger.info(f"Text: '{text}' | Detected: {detected_lang.name} ({detected_confidence:.3f}) vs English ({english_confidence:.3f}) | Ratio: {ratio:.2f}x")
+        logger.debug(f"Text: '{text}' | Detected: {detected_lang.name} ({detected_confidence:.3f}) vs English ({english_confidence:.3f}) | Ratio: {ratio:.2f}x")
 
         # If detected language confidence is below threshold, treat as uncertain
         if detected_confidence < MIN_CONFIDENCE_THRESHOLD:
-            logger.info(f"  -> Ignored: confidence {detected_confidence:.3f} < {MIN_CONFIDENCE_THRESHOLD}")
+            logger.debug(f"  -> Ignored: confidence {detected_confidence:.3f} < {MIN_CONFIDENCE_THRESHOLD}")
             return []
 
         # If detected language isn't significantly more confident than English, allow it
         # This handles short ambiguous text like "hello" that could be either
         if english_confidence > 0 and detected_confidence < (english_confidence * MIN_CONFIDENCE_RATIO):
-            logger.info(f"  -> Ignored: ratio < {MIN_CONFIDENCE_RATIO}x")
+            logger.debug(f"  -> Ignored: ratio < {MIN_CONFIDENCE_RATIO}x")
             return []
 
-        logger.info(f"  -> Flagged as non-English")
+        logger.debug(f"  -> Flagged as non-English")
 
         # Non-English detected with sufficient confidence - return detection
         score = 1.0 - english_confidence
